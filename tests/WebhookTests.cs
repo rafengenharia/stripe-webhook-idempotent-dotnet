@@ -20,7 +20,7 @@ public class WebhookTests : IDisposable
 
     static string EventJson(string id) => $$"""
     {"id":"{{id}}","object":"event","api_version":"2020-08-27","created":1700000000,"livemode":false,
-     "type":"invoice.paid","data":{"object":{"id":"in_1","object":"invoice","subscription":"sub_1"}}}
+     "type":"invoice.paid","data":{"object":{"id":"in_1","object":"invoice","customer":"cus_1"}}}
     """;
 
     static HttpRequestMessage Signed(string json, string secret = Secret)
@@ -36,7 +36,7 @@ public class WebhookTests : IDisposable
     int PaidInvoices()
     {
         using var scope = _factory.Services.CreateScope();
-        return scope.ServiceProvider.GetRequiredService<AppDb>().Subscriptions.Single(s => s.Id == "sub_1").PaidInvoices;
+        return scope.ServiceProvider.GetRequiredService<AppDb>().Subscriptions.Single(s => s.Id == "cus_1").PaidInvoices;
     }
 
     [Fact]
