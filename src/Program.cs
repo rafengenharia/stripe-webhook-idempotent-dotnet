@@ -41,9 +41,12 @@ app.MapPost("/stripe/webhook", async (HttpRequest req, AppDb db, IEventHandler h
         await db.SaveChangesAsync();   // PK violation here means a concurrent delivery won the race
         await tx.CommitAsync();
     }
-    catch (DbUpdateException) when (await db.ProcessedEvents.AsNoTracking().AnyAsync(e => e.Id == stripeEvent.Id))
+    catch (DbUpdateException)
     {
-        return Results.Ok();           // duplicate: safe to acknowledge
+        db.ChangeTracker.Clear();
+        if (await db.ProcessedEvents.AsNoTracking().AnyAsync(e => e.Id == stripeEvent.Id))
+            return Results.Ok();       // duplicate: a concurrent delivery won the race
+        throw;                         // a real database error: 500 so Stripe retries
     }
     // Any other exception: transaction rolls back, we return 500, Stripe retries later.
     return Results.Ok();
@@ -71,7 +74,7 @@ public class InvoiceEventHandler(AppDb db) : IEventHandler
     {
         if (e.Type != EventTypes.InvoicePaid) return;   // ignore types we don't care about
         var invoice = (Invoice)e.Data.Object;
-        var subId = invoice.SubscriptionId ?? "none";
+        var subId = invoice.CustomerId ?? "none";
         var sub = await db.Subscriptions.FindAsync(subId) ?? db.Subscriptions.Add(new Subscription { Id = subId }).Entity;
         sub.Status = "active";
         sub.PaidInvoices++;   // not idempotent on its own: that is why the event-id guard matters
