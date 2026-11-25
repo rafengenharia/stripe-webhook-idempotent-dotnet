@@ -4,6 +4,8 @@ using System.Text;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Configuration;
+using Microsoft.AspNetCore.TestHost;
+using Stripe;
 using Xunit;
 
 public class WebhookTests : IDisposable
@@ -23,9 +25,9 @@ public class WebhookTests : IDisposable
      "type":"invoice.paid","data":{"object":{"id":"in_1","object":"invoice","customer":"cus_1"}}}
     """.Replace("__ID__", id);
 
-    static HttpRequestMessage Signed(string json, string secret = Secret)
+    static HttpRequestMessage Signed(string json, string secret = Secret, int ageSeconds = 0)
     {
-        var t = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+        var t = DateTimeOffset.UtcNow.ToUnixTimeSeconds() - ageSeconds;
         var sig = Convert.ToHexString(new HMACSHA256(Encoding.UTF8.GetBytes(secret))
             .ComputeHash(Encoding.UTF8.GetBytes($"{t}.{json}"))).ToLowerInvariant();
         var req = new HttpRequestMessage(HttpMethod.Post, "/stripe/webhook") { Content = new StringContent(json, Encoding.UTF8, "application/json") };
@@ -40,7 +42,7 @@ public class WebhookTests : IDisposable
     }
 
     [Fact]
-    public async Task Replayed_event_is_processed_once()
+    public async Task Webhook_SameEventDeliveredTwice_ProcessedOnce()
     {
         var c = _factory.CreateClient();
         var json = EventJson("evt_1");
@@ -50,7 +52,7 @@ public class WebhookTests : IDisposable
     }
 
     [Fact]
-    public async Task Different_events_are_both_processed()
+    public async Task Webhook_DifferentEvents_BothProcessed()
     {
         var c = _factory.CreateClient();
         await c.SendAsync(Signed(EventJson("evt_a")));
@@ -59,10 +61,44 @@ public class WebhookTests : IDisposable
     }
 
     [Fact]
-    public async Task Bad_signature_is_rejected()
+    public async Task Webhook_BadSignature_Returns400()
     {
         var c = _factory.CreateClient();
         var r = await c.SendAsync(Signed(EventJson("evt_x"), "whsec_wrong"));
         Assert.Equal(HttpStatusCode.BadRequest, r.StatusCode);
+    }
+
+    [Fact]
+    public async Task Webhook_OldTimestamp_Returns400()
+    {
+        var c = _factory.CreateClient();
+        var r = await c.SendAsync(Signed(EventJson("evt_old"), ageSeconds: 3600));
+        Assert.Equal(HttpStatusCode.BadRequest, r.StatusCode);
+    }
+
+    [Fact]
+    public async Task Webhook_HandlerFailsOnce_RollsBackThenRetrySucceeds()
+    {
+        var calls = new int[1];
+        var factory = _factory.WithWebHostBuilder(b => b.ConfigureTestServices(s =>
+            s.AddScoped<IEventHandler>(sp => new FlakyHandler(sp.GetRequiredService<AppDb>(), calls))));
+        var c = factory.CreateClient();
+        var json = EventJson("evt_flaky");
+
+        var first = await c.SendAsync(Signed(json));    // handler throws after doing its work
+        var second = await c.SendAsync(Signed(json));   // Stripe retries the same event
+
+        Assert.Equal(HttpStatusCode.InternalServerError, first.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, second.StatusCode);
+        Assert.Equal(1, PaidInvoices());                // the failed attempt was rolled back
+    }
+}
+
+class FlakyHandler(AppDb db, int[] calls) : IEventHandler
+{
+    public async Task HandleAsync(Event e)
+    {
+        await new InvoiceEventHandler(db).HandleAsync(e);
+        if (Interlocked.Increment(ref calls[0]) == 1) throw new InvalidOperationException("boom");
     }
 }
