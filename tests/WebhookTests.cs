@@ -18,10 +18,10 @@ public class WebhookTests : IDisposable
 
     public void Dispose() { _factory.Dispose(); try { File.Delete(_db); } catch { } }
 
-    static string EventJson(string id) => $$"""
-    {"id":"{{id}}","object":"event","api_version":"2020-08-27","created":1700000000,"livemode":false,
+    static string EventJson(string id) => """
+    {"id":"__ID__","object":"event","api_version":"2020-08-27","created":1700000000,"livemode":false,
      "type":"invoice.paid","data":{"object":{"id":"in_1","object":"invoice","customer":"cus_1"}}}
-    """;
+    """.Replace("__ID__", id);
 
     static HttpRequestMessage Signed(string json, string secret = Secret)
     {
