@@ -5,7 +5,7 @@ using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Configuration;
 using Microsoft.AspNetCore.TestHost;
-using Stripe;
+using Event = Stripe.Event;
 using Xunit;
 
 public class WebhookTests : IDisposable
